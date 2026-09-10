@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Markdown 阅读器</title>
+  <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <link rel="stylesheet" href="/Src/css/style.css">
+  <script>
+    (function() {
+      var t = localStorage.getItem('mdr-theme');
+      if (t) {
+        document.documentElement.setAttribute('data-theme', t);
+        var map = { dark:'github-dark.min.css', dim:'github-dark-dimmed.min.css',
+          nord:'nord.min.css', 'solarized-light':'stackoverflow-light.min.css',
+          'solarized-dark':'stackoverflow-dark.min.css' };
+        if (map[t]) {
+          var l = document.getElementById('hljs-theme');
+          if (l) l.href = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/' + map[t];
+        }
+      }
+    })();
+  </script>
+</head>
+<body class="view-bookshelf">
+  <header id="topbar">
+    <div class="topbar-row topbar-row-main">
+      <div class="topbar-left">
+        <button id="sidebar-toggle" aria-label="Toggle sidebar">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <a href="#home" class="site-title" id="site-title">Markdown 阅读器</a>
+      </div>
+      <div class="topbar-search">
+        <div class="search-input-wrap">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <input type="text" id="top-search-input" placeholder="搜索书籍名称、作者...">
+        </div>
+        <button id="top-search-btn">搜索</button>
+      </div>
+      <div class="topbar-actions">
+        <div class="theme-switcher">
+          <button id="theme-toggle" aria-label="切换主题">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="5"/>
+              <line x1="12" y1="1" x2="12" y2="3"/>
+              <line x1="12" y1="21" x2="12" y2="23"/>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+              <line x1="1" y1="12" x2="3" y2="12"/>
+              <line x1="21" y1="12" x2="23" y2="12"/>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+          </button>
+          <div id="theme-menu" class="theme-menu">
+            <button class="theme-menu-item active" data-theme="light"><span class="theme-dot"></span>浅色</button>
+            <button class="theme-menu-item" data-theme="dark"><span class="theme-dot"></span>深色</button>
+            <button class="theme-menu-item" data-theme="dim"><span class="theme-dot"></span>柔和暗色</button>
+            <button class="theme-menu-item" data-theme="nord"><span class="theme-dot"></span>Nord</button>
+            <button class="theme-menu-item" data-theme="solarized-light"><span class="theme-dot"></span>Solarized 浅</button>
+            <button class="theme-menu-item" data-theme="solarized-dark"><span class="theme-dot"></span>Solarized 暗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="topbar-row topbar-row-book" id="topbar-book-row" hidden>
+      <div id="book-title-bar"></div>
+    </div>
+  </header>
+
+  <div id="bookshelf-view" class="bookshelf-page">
+    <div class="bookshelf-inner">
+      <div class="bookshelf-search">
+        <div class="search-input-wrap">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <input type="text" id="bookshelf-search-input" placeholder="搜索书籍名称、作者...">
+        </div>
+      </div>
+
+      <section id="history-section" class="history-section" hidden>
+        <div class="history-header">
+          <h2>阅读历史</h2>
+          <button type="button" id="history-more-btn" class="history-more-btn" hidden>更多</button>
+        </div>
+        <div id="history-preview" class="history-preview"></div>
+        <div id="history-grouped" class="history-grouped" hidden></div>
+      </section>
+
+      <section id="books-section" class="books-section">
+        <h2>全部书籍</h2>
+        <div id="book-grid" class="book-grid"></div>
+        <p id="books-empty" class="books-empty" hidden></p>
+      </section>
+    </div>
+  </div>
+
+  <div id="reader-view" hidden>
+    <div id="app-container">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-search-wrap">
+            <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <input type="text" id="nav-search-input" placeholder="筛选导航...">
+          </div>
+        </div>
+        <nav id="nav-tree"></nav>
+      </aside>
+
+      <div id="sidebar-overlay"></div>
+
+      <main id="content">
+        <div id="loading" class="loading hidden">
+          <div class="loading-spinner"></div>
+          <p>加载中...</p>
+        </div>
+        <article id="doc-content"></article>
+      </main>
+    </div>
+  </div>
+
+  <div id="resume-modal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card" role="dialog" aria-labelledby="resume-title">
+      <h3 id="resume-title">是否回到上次阅读的位置？</h3>
+      <p>上次读到：<strong id="resume-doc-label"></strong></p>
+      <div class="modal-actions">
+        <button type="button" id="resume-yes" class="btn-primary">回到上次位置</button>
+        <button type="button" id="resume-no" class="btn-ghost">从首页开始</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/ini.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+
+  <script src="/Src/js/theme.js"></script>
+  <script src="/Src/js/renderer.js"></script>
+  <script src="/Src/js/nav.js"></script>
+  <script src="/Src/js/search.js"></script>
+  <script src="/Src/js/history.js"></script>
+  <script src="/Src/js/bookshelf.js"></script>
+  <script src="/Src/js/app.js"></script>
+</body>
+</html>

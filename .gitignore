@@ -1,0 +1,37 @@
+# Node 本地依赖
+node_modules/
+Src/node_modules/
+npm-debug.log*
+yarn-error.log
+*.log
+
+# 本机路径配置（只入库 *.example.jsonc）
+/config.jsonc
+/config.json
+
+# 本机书籍目录（若 booksRoot 指向 ./Books）
+/Books/
+
+# 操作系统
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 编辑器
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+
+# 环境与缓存
+.env
+.env.*
+.cache/
+coverage/
