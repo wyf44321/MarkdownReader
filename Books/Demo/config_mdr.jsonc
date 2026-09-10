@@ -1,0 +1,15 @@
+{
+  "name": "功能演示",
+  "path": [".", "../DemoExtra"],
+  "meta": {
+    "作者": "示例",
+    "分类": "演示",
+    "用途": "验证排除、README 按钮与监视",
+    "备注": "第四行不应直接显示"
+  },
+  "exclude": ["hidden.md", "draft/**"],
+  "features": {
+    "UseTitleAsFileName": true,
+    "UseTitleAsSectionName": true
+  }
+}

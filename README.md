@@ -30,13 +30,15 @@
 
 ## 增加一本书
 
-1. 在某一个 `booksRoot` 下建一个子目录（例如 `Books/LearningUE/`）。
+1. 在某一个 `booksRoot` 下建一个子目录（例如 `Books/XXX/`）。
 2. 把 [`config_mdr.example.jsonc`](config_mdr.example.jsonc) 拷进去，改名为 `config_mdr.jsonc`。
 3. 按文件里的中文注释填写：书名、封面、正文路径、meta、排除列表、侧栏 Features。
 
 只有存在 `config_mdr.jsonc`（或旧的 `config_mdr.json`）的子目录才会出现在首页。每个 `booksRoot` 都只扫一层，不会递归找配置。
 
-`path` 相对 `config_mdr.jsonc` 所在目录，可写一个或一组根。若配置文件就在书根，写 `"."`；若只是一个「书卡」目录，写指向真正 Markdown 根的相对路径，例如 `"../../../LearningUE"`。多个根会合并进同一本书的侧栏，同名路径以数组里靠前的为准。
+`path` 相对 `config_mdr.jsonc` 所在目录，可写一个或一组根。若配置文件就在书根，写 `"."`；若只是一个「书卡」目录，写指向真正 Markdown 根的相对路径，例如 `"../../../XXX"`。多个根会合并进同一本书的侧栏，同名路径以数组里靠前的为准。
+
+仓库自带 `Books/Demo` 作为公开示例。你自己的书请放到仓库外，用本机 `config.jsonc` 的 `booksRoot` 指向，不要把私人内容提交进本仓库。
 
 ## 阅读说明
 
@@ -44,6 +46,6 @@
 - 点某本书进入阅读。若有上次记录，会询问是否回到上次位置。
 - 书籍根目录有 `README.md`（大小写不敏感）时，默认打开它，侧栏第一行是「首页」。
 - 目录行点击只展开/折叠。若该目录有 README，右侧按钮才打开说明文档；README 本身不出现在文件列表里。
-- `UseTitleAsFileName` / `UseTitleAsSectionName` 打开后，侧栏主标题用一级标题，文件名/目录名作为副标题（与 LearningUE 一致）。
+- `UseTitleAsFileName` / `UseTitleAsSectionName` 打开后，侧栏主标题用一级标题，文件名/目录名作为副标题。
 
 修改书籍目录下的 Markdown 后，刷新页面即可看到更新（服务端会监视文件变化并失效缓存）。

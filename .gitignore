@@ -9,8 +9,8 @@ yarn-error.log
 /config.jsonc
 /config.json
 
-# 本机书籍目录（若 booksRoot 指向 ./Books）
-/Books/
+# 私人书籍请放到仓库外，用本机 config.jsonc 指向。
+# 仓库内 Books/ 是公开示例，需要入库。
 
 # 操作系统
 .DS_Store
