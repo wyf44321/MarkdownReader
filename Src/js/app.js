@@ -28,9 +28,9 @@ const App = (() => {
   }
 
   async function init() {
+    ThemeSwitcher.init();
     DocRenderer.init();
     Search.init();
-    ThemeSwitcher.init();
     Bookshelf.init((bookId) => {
       window.location.hash = '#book/' + encodeURIComponent(bookId);
     });

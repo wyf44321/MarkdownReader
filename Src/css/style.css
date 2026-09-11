@@ -210,13 +210,17 @@ body {
 }
 #sidebar-toggle:hover { background: var(--color-sidebar-hover); color: var(--color-text); }
 .site-title {
-  font-size: 1.15rem;
-  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
   color: var(--color-text);
   text-decoration: none;
   white-space: nowrap;
+  text-align: center;
 }
 .site-title:hover { color: var(--color-primary); }
+body.view-bookshelf .site-title { display: none; }
 
 /* Top Search */
 .topbar-search {
@@ -225,6 +229,7 @@ body {
   gap: 8px;
   flex: 1;
   max-width: 480px;
+  min-width: 0;
 }
 .search-input-wrap {
   position: relative;

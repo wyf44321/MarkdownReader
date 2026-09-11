@@ -70,6 +70,10 @@ const DocRenderer = (() => {
       smartypants: false
     });
 
+    _applyMermaidTheme();
+  }
+
+  function _applyMermaidTheme() {
     const mermaidTheme = (typeof ThemeSwitcher !== 'undefined')
       ? ThemeSwitcher.getMermaidTheme()
       : 'default';
@@ -98,6 +102,7 @@ const DocRenderer = (() => {
         }
       });
       try {
+        _applyMermaidTheme();
         await mermaid.run({ nodes: mermaidNodes });
       } catch (e) {
         console.warn('Mermaid rendering error:', e);
