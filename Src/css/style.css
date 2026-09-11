@@ -892,6 +892,52 @@ body.sidebar-open #content { margin-left: var(--sidebar-width); }
 body.view-bookshelf #sidebar-toggle { display: none; }
 body.view-bookshelf #sidebar,
 body.view-bookshelf #sidebar-overlay { display: none; }
+body.view-notfound #sidebar-toggle { display: none; }
+body.view-notfound #sidebar,
+body.view-notfound #sidebar-overlay { display: none; }
+body.view-notfound .topbar-search { display: none; }
+
+.notfound-page {
+  margin-top: var(--topbar-height);
+  min-height: calc(100vh - var(--topbar-height));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px 80px;
+}
+.notfound-page[hidden] { display: none !important; }
+.notfound-inner {
+  text-align: center;
+  max-width: 480px;
+}
+.notfound-code {
+  font-size: 4.5rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+}
+.notfound-title {
+  margin: 16px 0 10px;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+.notfound-desc {
+  margin: 0 0 28px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  word-break: break-word;
+}
+.notfound-back {
+  display: inline-block;
+  padding: 8px 18px;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+}
+.notfound-back:hover { background: var(--color-primary-dark); }
 
 /* ===== 侧栏双行标题与 README 按钮 ===== */
 .nav-dir-header {
@@ -1049,16 +1095,10 @@ body.view-bookshelf #sidebar-overlay { display: none; }
 }
 .book-cover,
 .history-cover {
+  position: relative;
   aspect-ratio: 3 / 4;
   background: var(--color-bg-secondary);
   overflow: hidden;
-}
-.book-cover-img,
-.history-cover .book-cover-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
 }
 .book-cover-placeholder {
   width: 100%;
@@ -1069,6 +1109,21 @@ body.view-bookshelf #sidebar-overlay { display: none; }
   color: var(--color-text-muted);
   background:
     linear-gradient(160deg, var(--color-primary-light), var(--color-bg-secondary));
+}
+.book-cover-placeholder.book-cover-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.book-cover-img,
+.history-cover .book-cover-img {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 .book-card-body,
 .history-info {
@@ -1092,10 +1147,13 @@ body.view-bookshelf #sidebar-overlay { display: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.book-meta { min-width: 0; }
-.book-meta-row {
+.book-meta {
   position: relative;
+  min-width: 0;
+}
+.book-meta-row {
   display: flex;
+  align-items: baseline;
   gap: 8px;
   font-size: 0.75rem;
   line-height: 1.45;
@@ -1107,29 +1165,46 @@ body.view-bookshelf #sidebar-overlay { display: none; }
   color: var(--color-text-muted);
 }
 .book-meta-row .meta-val {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.book-meta-more { color: var(--color-text-muted); }
-.book-meta-row[data-tooltip]:hover::after {
-  content: attr(data-tooltip);
+.book-meta-more {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+.book-meta-tip {
+  display: none;
   position: absolute;
   left: 0;
+  right: 0;
   bottom: calc(100% + 6px);
-  z-index: 5;
-  min-width: 100%;
-  max-width: 240px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  z-index: 6;
+  padding: 8px 10px;
+  border-radius: 8px;
   background: var(--color-text);
   color: var(--color-bg);
   font-size: 0.72rem;
-  line-height: 1.4;
-  white-space: pre-wrap;
+  line-height: 1.45;
   box-shadow: 0 4px 12px var(--color-shadow);
   pointer-events: none;
+  text-align: left;
+}
+.book-meta:hover .book-meta-tip { display: block; }
+.book-meta-tip-row {
+  display: flex;
+  gap: 8px;
+}
+.book-meta-tip .meta-key {
+  flex-shrink: 0;
+  opacity: 0.72;
+}
+.book-meta-tip .meta-val {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .books-empty {
   color: var(--color-text-muted);
@@ -1161,8 +1236,27 @@ body.view-bookshelf #sidebar-overlay { display: none; }
   padding: 24px;
   box-shadow: 0 12px 40px var(--color-shadow);
 }
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.modal-close:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
 .modal-card h3 {
   margin: 0 0 10px;
+  padding-right: 28px;
   font-size: 1.1rem;
 }
 .modal-card p {

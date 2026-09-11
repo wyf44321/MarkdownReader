@@ -38,9 +38,11 @@ const ReadingHistory = (() => {
     if (!entry || !entry.bookId) return;
     const data = _load();
     const prev = data.books[entry.bookId] || {};
+    const bookName = entry.bookName || prev.bookName || entry.bookId;
     data.books[entry.bookId] = {
       bookId: entry.bookId,
-      bookName: entry.bookName || prev.bookName || entry.bookId,
+      bookName: bookName,
+      coverUrl: entry.coverUrl != null ? entry.coverUrl : prev.coverUrl || null,
       docPath: entry.docPath != null ? entry.docPath : prev.docPath,
       docTitle: entry.docTitle != null ? entry.docTitle : prev.docTitle,
       scrollY: entry.scrollY != null ? entry.scrollY : (prev.scrollY || 0),
@@ -65,6 +67,46 @@ const ReadingHistory = (() => {
     return _load().books[bookId] || null;
   }
 
+  function remove(bookId) {
+    if (!bookId) return;
+    const data = _load();
+    if (!data.books[bookId]) return;
+    delete data.books[bookId];
+    _save(data);
+  }
+
+  function retain(bookList) {
+    const books = Array.isArray(bookList) ? bookList : [];
+    const keep = new Set();
+    const byName = new Map();
+    for (const book of books) {
+      if (!book || !book.id) continue;
+      keep.add(book.id);
+      const name = book.name;
+      if (!name) continue;
+      const arr = byName.get(name) || [];
+      arr.push(book);
+      byName.set(name, arr);
+    }
+    const data = _load();
+    let changed = false;
+    for (const id of Object.keys(data.books)) {
+      if (keep.has(id)) continue;
+      const entry = data.books[id];
+      const matches = entry && entry.bookName ? byName.get(entry.bookName) : null;
+      if (matches && matches.length === 1) {
+        const destId = matches[0].id;
+        const dest = data.books[destId];
+        if (!dest || (entry.updatedAt || 0) >= (dest.updatedAt || 0)) {
+          data.books[destId] = Object.assign({}, entry, { bookId: destId });
+        }
+      }
+      delete data.books[id];
+      changed = true;
+    }
+    if (changed) _save(data);
+  }
+
   function list() {
     const books = _load().books;
     return Object.values(books).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -85,5 +127,5 @@ const ReadingHistory = (() => {
     return groups.filter((g) => g.items.length > 0);
   }
 
-  return { record, updateScroll, get, list, groupByTime };
+  return { record, updateScroll, get, remove, retain, list, groupByTime };
 })();

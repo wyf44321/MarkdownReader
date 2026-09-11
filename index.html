@@ -130,14 +130,24 @@
     </div>
   </div>
 
+  <div id="notfound-view" class="notfound-page" hidden>
+    <div class="notfound-inner">
+      <div class="notfound-code">404</div>
+      <h1 class="notfound-title">未找到书籍</h1>
+      <p class="notfound-desc">「<span id="notfound-book-name"></span>」已经不在书架上，已从阅读历史中移除。</p>
+      <a href="#home" class="notfound-back">返回书架</a>
+    </div>
+  </div>
+
   <div id="resume-modal" class="modal" hidden>
     <div class="modal-backdrop"></div>
     <div class="modal-card" role="dialog" aria-labelledby="resume-title">
+      <button type="button" id="resume-close" class="modal-close" aria-label="关闭">×</button>
       <h3 id="resume-title">是否回到上次阅读的位置？</h3>
       <p>上次读到：<strong id="resume-doc-label"></strong></p>
       <div class="modal-actions">
-        <button type="button" id="resume-yes" class="btn-primary">回到上次位置</button>
         <button type="button" id="resume-no" class="btn-ghost">从首页开始</button>
+        <button type="button" id="resume-yes" class="btn-primary">回到上次位置</button>
       </div>
     </div>
   </div>

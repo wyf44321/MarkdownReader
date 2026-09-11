@@ -1,0 +1,6 @@
+{
+  // 接力用配置：只有数组字段会合并进阅读器主配置。
+  // 非数组字段即使写了也不生效，仍以 MarkdownReader/config.jsonc 为准。
+  // "booksRoot": ["../OtherShelf"],
+  // "booksCfg": ["./cfgs/*.jsonc"]
+}

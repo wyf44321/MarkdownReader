@@ -44,6 +44,7 @@ const Bookshelf = (() => {
         return;
       }
       _books = Array.isArray(data) ? data : [];
+      if (_books.length) ReadingHistory.retain(_books);
       _renderBooks();
       _renderHistory();
     } catch (err) {
@@ -62,6 +63,34 @@ const Bookshelf = (() => {
 
   function _bookById(id) {
     return _books.find((b) => b.id === id) || null;
+  }
+
+  function _bookForHistory(item) {
+    if (!item) return null;
+    const byId = _bookById(item.bookId);
+    if (byId) return byId;
+    const name = item.bookName;
+    if (!name) return null;
+    const matches = _books.filter((b) => b.name === name);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function _placeholderHtml(extra) {
+    return '<div class="book-cover-placeholder' + extra + '" aria-hidden="true">' +
+      '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">' +
+      '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>' +
+      '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>' +
+      '</svg></div>';
+  }
+
+  function _coverHtml(book, extraClass) {
+    const extra = extraClass ? ' ' + extraClass : '';
+    if (book && book.coverUrl) {
+      return _placeholderHtml(extra + ' book-cover-mask') +
+        '<img class="book-cover-img' + extra + '" src="' + _esc(book.coverUrl) +
+        '" alt="' + _esc(book.name || '') + '">';
+    }
+    return _placeholderHtml(extra);
   }
 
   function _matchesBook(book, query) {
@@ -83,37 +112,30 @@ const Bookshelf = (() => {
     return el.innerHTML;
   }
 
-  function _coverHtml(book, extraClass) {
-    if (book && book.coverUrl) {
-      return '<img class="book-cover-img' + (extraClass ? ' ' + extraClass : '') +
-        '" src="' + _esc(book.coverUrl) + '" alt="' + _esc(book.name || '') + '">';
-    }
-    return '<div class="book-cover-placeholder' + (extraClass ? ' ' + extraClass : '') +
-      '" aria-hidden="true">' +
-      '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">' +
-      '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>' +
-      '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>' +
-      '</svg></div>';
-  }
-
   function _metaRows(meta) {
     const entries = Object.entries(meta || {});
     if (!entries.length) return '';
     const shown = entries.slice(0, 3);
-    const rest = entries.slice(3);
+    const hasMore = entries.length > 3;
     let html = '<div class="book-meta">';
-    for (const [k, v] of shown) {
-      const full = k + '  ' + v;
-      html += '<div class="book-meta-row" data-tooltip="' + _esc(full) + '">' +
+    shown.forEach(([k, v], i) => {
+      const tail = (i === shown.length - 1 && hasMore)
+        ? '<span class="book-meta-more">...</span>'
+        : '';
+      html += '<div class="book-meta-row">' +
+        '<span class="meta-key">' + _esc(k) + '</span>' +
+        '<span class="meta-val">' + _esc(v) + '</span>' +
+        tail +
+        '</div>';
+    });
+    html += '<div class="book-meta-tip" role="tooltip">';
+    for (const [k, v] of entries) {
+      html += '<div class="book-meta-tip-row">' +
         '<span class="meta-key">' + _esc(k) + '</span>' +
         '<span class="meta-val">' + _esc(v) + '</span>' +
         '</div>';
     }
-    if (rest.length) {
-      const extra = rest.map(([k, v]) => k + '  ' + v).join('\n');
-      html += '<div class="book-meta-row book-meta-more" data-tooltip="' + _esc(extra) + '">...</div>';
-    }
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
 
@@ -126,7 +148,7 @@ const Bookshelf = (() => {
     if (!visible.length) {
       if (empty) {
         empty.hidden = false;
-        empty.textContent = _books.length ? '没有匹配的书籍。' : '还没有发现书籍。请在 booksRoot 的下一层目录放入 config_mdr.jsonc。';
+        empty.textContent = _books.length ? '没有匹配的书籍。' : '还没有发现书籍。请在 booksRoot 的下一层目录放入 config_mdr.jsonc，或用 booksCfg 指定书籍配置文件。';
       }
       return;
     }
@@ -150,12 +172,29 @@ const Bookshelf = (() => {
     grid.appendChild(frag);
   }
 
+  function _historyItems() {
+    const seen = new Set();
+    const items = [];
+    for (const item of ReadingHistory.list()) {
+      const book = _bookForHistory(item);
+      const key = (book && book.id) || item.bookName || item.bookId;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      items.push(item);
+    }
+    return items;
+  }
+
   function _historyItemHtml(item) {
-    const book = _bookById(item.bookId);
+    const book = _bookForHistory(item);
     const name = (book && book.name) || item.bookName || item.bookId;
-    const coverBook = book || { coverUrl: null, name: name };
+    const coverBook = {
+      name: name,
+      coverUrl: (book && book.coverUrl) || item.coverUrl || null
+    };
+    const openId = (book && book.id) || item.bookId;
     const docLabel = (item.docPath === '#' || item.docPath === '__home') ? '首页' : (item.docTitle || item.docPath || '');
-    return '<button type="button" class="history-card" data-book-id="' + _esc(item.bookId) + '">' +
+    return '<button type="button" class="history-card" data-book-id="' + _esc(openId) + '">' +
       '<div class="history-cover">' + _coverHtml(coverBook, 'history') + '</div>' +
       '<div class="history-info">' +
       '<div class="history-title">' + _esc(name) + '</div>' +
@@ -178,7 +217,7 @@ const Bookshelf = (() => {
     const moreBtn = document.getElementById('history-more-btn');
     if (!section || !preview || !grouped) return;
 
-    const items = ReadingHistory.list();
+    const items = _historyItems();
     if (!items.length) {
       section.hidden = true;
       return;

@@ -10,11 +10,25 @@ const app = express();
 const ROOT = path.resolve(__dirname, '..');
 const ALWAYS_IGNORED = new Set(['.git', '.vscode', 'node_modules']);
 
+const READER_ARRAY_FIELDS = ['booksRoot', 'booksCfg'];
+const BOOK_SHAPE_FIELDS = ['name', 'path', 'cover', 'meta', 'exclude', 'features'];
+
 let booksRoots = [];
+let extraBookConfigs = [];
+let booksCfgWatchDirs = [];
+let relayConfigFiles = [];
 let booksRootError = null;
 /** @type {Map<string, object>} */
 let books = new Map();
 const h1Cache = new Map();
+
+let configDirty = true;
+let configRevision = 0;
+let configFingerprint = '';
+let configWatchers = [];
+let configWatchTimer = null;
+let configDiscovering = false;
+let ignoreWatchUntil = 0;
 
 function parseJsonc(text) {
   return JSON.parse(stripJsonComments(text));
@@ -54,6 +68,14 @@ function asStringList(value) {
   return s ? [s] : [];
 }
 
+function dirKey(abs) {
+  try {
+    return fs.realpathSync(abs);
+  } catch {
+    return path.resolve(abs);
+  }
+}
+
 function resolveExistingDirs(baseDir, rels) {
   const found = [];
   const missing = [];
@@ -64,12 +86,206 @@ function resolveExistingDirs(baseDir, rels) {
       missing.push(abs);
       continue;
     }
-    const resolved = path.resolve(abs);
+    const resolved = dirKey(abs);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     found.push(resolved);
   }
   return { found, missing };
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** 接力只认数组字段；字符串等其它类型一律忽略，仍以主配置为准 */
+function readRelayArrays(configAbs) {
+  try {
+    const cfg = parseJsonc(fs.readFileSync(configAbs, 'utf8'));
+    if (!isPlainObject(cfg)) return {};
+    const out = {};
+    for (const key of READER_ARRAY_FIELDS) {
+      if (!Array.isArray(cfg[key])) continue;
+      const items = cfg[key].map((v) => String(v).trim()).filter(Boolean);
+      if (items.length) out[key] = items;
+    }
+    return out;
+  } catch (err) {
+    console.warn('[config] 解析 ' + configAbs + ' 失败：' + err.message);
+    return {};
+  }
+}
+
+function looksLikeGlob(rel) {
+  return /[*?\[]/.test(String(rel || ''));
+}
+
+function collectGlobFiles(baseDir, pattern) {
+  const posixPat = toPosix(pattern).replace(/^\.\//, '');
+  const segs = posixPat.split('/').filter((s) => s && s !== '.');
+  const prefixSegs = [];
+  for (const seg of segs) {
+    if (/[*?\[]/.test(seg)) break;
+    prefixSegs.push(seg);
+  }
+  const startDir = prefixSegs.length ? path.resolve(baseDir, ...prefixSegs) : path.resolve(baseDir);
+  const rest = segs.slice(prefixSegs.length);
+  const maxDepth = rest.includes('**') ? Infinity : Math.max(rest.length, 1);
+  const out = [];
+
+  function visit(dir, depth) {
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    names.sort(naturalCompare);
+    for (const name of names) {
+      if (isAlwaysIgnoredName(name)) continue;
+      const abs = path.join(dir, name);
+      let stat;
+      try { stat = fs.statSync(abs); } catch { continue; }
+      if (stat.isDirectory()) {
+        if (depth < maxDepth) visit(abs, depth + 1);
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      const rel = toPosix(path.relative(baseDir, abs));
+      if (minimatch(rel, posixPat, { dot: true })) out.push(abs);
+    }
+  }
+
+  visit(startDir, 1);
+  return { files: out, watchDir: startDir };
+}
+
+function resolveExistingFiles(baseDir, rels) {
+  const found = [];
+  const missing = [];
+  const watchDirs = [];
+  const seen = new Set();
+
+  function addFile(abs) {
+    try {
+      if (!fs.statSync(abs).isFile()) return;
+    } catch {
+      return;
+    }
+    const resolved = dirKey(abs);
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
+    found.push(resolved);
+  }
+
+  for (const rel of rels) {
+    if (looksLikeGlob(rel)) {
+      const { files, watchDir } = collectGlobFiles(baseDir, rel);
+      if (watchDir) watchDirs.push(watchDir);
+      if (!files.length) {
+        missing.push(String(rel));
+        continue;
+      }
+      for (const abs of files) addFile(abs);
+      continue;
+    }
+    const abs = path.resolve(baseDir, rel);
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+      missing.push(abs);
+      continue;
+    }
+    addFile(abs);
+  }
+  return { found, missing, watchDirs };
+}
+
+/** 在某个 booksRoot 目录自身及其一层子目录里找接力用的 config.jsonc */
+function findRelayConfigs(dirAbs) {
+  const files = [];
+  const seen = new Set();
+  function add(fileAbs) {
+    if (!fileAbs) return;
+    const key = dirKey(fileAbs);
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(fileAbs);
+  }
+  add(firstExistingFile(dirAbs, ['config.jsonc', 'config.json']));
+  let names;
+  try {
+    names = fs.readdirSync(dirAbs);
+  } catch {
+    return files;
+  }
+  for (const name of names) {
+    if (isAlwaysIgnoredName(name)) continue;
+    const child = path.join(dirAbs, name);
+    try {
+      if (!fs.statSync(child).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    add(firstExistingFile(child, ['config.jsonc', 'config.json']));
+  }
+  return files;
+}
+
+function expandReaderArrays(initialConfigAbs, mainCfg) {
+  const scanRoots = [];
+  const bookCfgFiles = [];
+  const cfgWatchDirs = [];
+  const relayConfigs = [];
+  const seenDir = new Set();
+  const seenBookCfg = new Set();
+  const seenRelay = new Set();
+  const missingRoots = [];
+  const missingCfgs = [];
+  const queue = [];
+  const baseDir = path.dirname(initialConfigAbs);
+
+  seenRelay.add(dirKey(initialConfigAbs));
+
+  function addRoots(fromDir, rels) {
+    const resolved = resolveExistingDirs(fromDir, rels);
+    for (const m of resolved.missing) missingRoots.push(m);
+    for (const dir of resolved.found) {
+      if (seenDir.has(dir)) continue;
+      seenDir.add(dir);
+      scanRoots.push(dir);
+      queue.push(dir);
+    }
+  }
+
+  function addBookCfgs(fromDir, rels) {
+    const resolved = resolveExistingFiles(fromDir, rels);
+    for (const m of resolved.missing) missingCfgs.push(m);
+    for (const dir of resolved.watchDirs || []) cfgWatchDirs.push(dir);
+    for (const fileAbs of resolved.found) {
+      if (seenBookCfg.has(fileAbs)) continue;
+      seenBookCfg.add(fileAbs);
+      bookCfgFiles.push(fileAbs);
+    }
+  }
+
+  addRoots(baseDir, asStringList(mainCfg && mainCfg.booksRoot));
+  if (Array.isArray(mainCfg && mainCfg.booksCfg)) {
+    addBookCfgs(baseDir, asStringList(mainCfg.booksCfg));
+  }
+
+  while (queue.length) {
+    const dir = queue.shift();
+    for (const cfgAbs of findRelayConfigs(dir)) {
+      const cfgKey = dirKey(cfgAbs);
+      if (seenRelay.has(cfgKey)) continue;
+      seenRelay.add(cfgKey);
+      relayConfigs.push(cfgAbs);
+      const arrays = readRelayArrays(cfgAbs);
+      if (arrays.booksRoot) addRoots(path.dirname(cfgAbs), arrays.booksRoot);
+      if (arrays.booksCfg) addBookCfgs(path.dirname(cfgAbs), arrays.booksCfg);
+    }
+  }
+
+  return { booksRoots: scanRoots, bookCfgFiles, cfgWatchDirs, relayConfigs, missingRoots, missingCfgs };
 }
 
 function rootsKey(roots) {
@@ -163,35 +379,62 @@ function isExcluded(relPosix, patterns) {
 }
 
 function loadReaderConfig() {
+  extraBookConfigs = [];
+  booksCfgWatchDirs = [];
+  relayConfigFiles = [];
   const configPath = firstExistingFile(ROOT, ['config.jsonc', 'config.json']);
   if (!configPath) {
     booksRoots = [];
-    booksRootError = '未找到 config.jsonc。请复制 config.example.jsonc 为 config.jsonc 并填写 booksRoot。';
+    booksRootError = '未找到 config.jsonc。请复制 config.example.jsonc 为 config.jsonc 并填写 booksRoot 或 booksCfg。';
     return;
   }
   try {
     const cfg = parseJsonc(fs.readFileSync(configPath, 'utf8'));
-    const rels = asStringList(cfg && cfg.booksRoot);
-    if (!rels.length) {
+    const hasRoot = asStringList(cfg && cfg.booksRoot).length > 0;
+    const hasCfg = Array.isArray(cfg && cfg.booksCfg) && asStringList(cfg.booksCfg).length > 0;
+    if (!hasRoot && !hasCfg) {
       booksRoots = [];
-      booksRootError = 'config.jsonc 缺少 booksRoot。';
+      booksRootError = 'config.jsonc 缺少 booksRoot 或 booksCfg。';
       return;
     }
-    const { found, missing } = resolveExistingDirs(ROOT, rels);
-    if (!found.length) {
+    const expanded = expandReaderArrays(configPath, cfg);
+    if (!expanded.booksRoots.length && !expanded.bookCfgFiles.length) {
       booksRoots = [];
-      booksRootError = 'booksRoot 都不是有效目录：' + missing.join('；');
+      extraBookConfigs = [];
+      const miss = expanded.missingRoots.concat(expanded.missingCfgs);
+      booksRootError = 'booksRoot / booksCfg 都不是有效路径：' + (miss.join('；') || '(空)');
       return;
     }
-    if (missing.length) {
-      console.warn('[config] 忽略无效 booksRoot：' + missing.join('；'));
+    if (expanded.missingRoots.length) {
+      console.warn('[config] 忽略无效 booksRoot：' + expanded.missingRoots.join('；'));
     }
-    booksRoots = found;
+    if (expanded.missingCfgs.length) {
+      console.warn('[config] 忽略无效 booksCfg：' + expanded.missingCfgs.join('；'));
+    }
+    booksRoots = expanded.booksRoots;
+    extraBookConfigs = expanded.bookCfgFiles;
+    booksCfgWatchDirs = expanded.cfgWatchDirs || [];
+    relayConfigFiles = expanded.relayConfigs || [];
     booksRootError = null;
   } catch (err) {
     booksRoots = [];
+    extraBookConfigs = [];
+    booksCfgWatchDirs = [];
+    relayConfigFiles = [];
     booksRootError = '解析 ' + path.basename(configPath) + ' 失败：' + err.message;
   }
+}
+
+function isBookConfigShape(raw) {
+  if (!isPlainObject(raw)) return false;
+  if (!BOOK_SHAPE_FIELDS.some((key) => raw[key] != null)) return false;
+  if (raw.name != null && typeof raw.name !== 'string') return false;
+  if (raw.cover != null && typeof raw.cover !== 'string') return false;
+  if (raw.path != null && typeof raw.path !== 'string' && !Array.isArray(raw.path)) return false;
+  if (raw.meta != null && !isPlainObject(raw.meta)) return false;
+  if (raw.exclude != null && !Array.isArray(raw.exclude)) return false;
+  if (raw.features != null && !isPlainObject(raw.features)) return false;
+  return true;
 }
 
 function parseBookConfig(configAbs, folderName) {
@@ -210,8 +453,10 @@ function parseBookConfig(configAbs, folderName) {
   let coverAbs = null;
   if (raw.cover && String(raw.cover).trim()) {
     const coverResolved = path.resolve(configDir, String(raw.cover));
-    if (isInside(configDir, coverResolved) && fs.existsSync(coverResolved) && fs.statSync(coverResolved).isFile()) {
+    if (fs.existsSync(coverResolved) && fs.statSync(coverResolved).isFile()) {
       coverAbs = coverResolved;
+    } else {
+      console.warn('[book] ' + folderName + ' 封面不存在：' + coverResolved);
     }
   }
 
@@ -221,6 +466,7 @@ function parseBookConfig(configAbs, folderName) {
   const book = {
     id: folderName,
     name: raw.name && String(raw.name).trim() ? String(raw.name).trim() : folderName,
+    configAbs: dirKey(configAbs),
     configDir,
     contentRoots,
     coverAbs,
@@ -239,6 +485,68 @@ function parseBookConfig(configAbs, folderName) {
   };
   refreshHomeReadme(book);
   return book;
+}
+
+function stripConfigExt(name) {
+  return String(name).replace(/\.(jsonc|json)$/i, '');
+}
+
+/** booksCfg 书卡用文件名做 id；通用名 config_mdr / config 仍用所在目录名。 */
+function extraBookPreferredId(configAbs) {
+  const stem = stripConfigExt(path.basename(configAbs));
+  if (!stem || /^(config_mdr|config)$/i.test(stem)) {
+    return path.basename(path.dirname(configAbs));
+  }
+  return stem;
+}
+
+function tryLoadExtraBook(configAbs) {
+  let raw;
+  try {
+    raw = parseJsonc(fs.readFileSync(configAbs, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!isBookConfigShape(raw)) return null;
+  try {
+    return parseBookConfig(configAbs, extraBookPreferredId(configAbs));
+  } catch {
+    return null;
+  }
+}
+
+function uniqueBookId(next, preferred, contextDir) {
+  if (!next.has(preferred)) return preferred;
+  const suffix = path.basename(contextDir || preferred);
+  let id = suffix + '__' + preferred;
+  let n = 2;
+  while (next.has(id)) {
+    id = suffix + '__' + preferred + '_' + n;
+    n += 1;
+  }
+  return id;
+}
+
+function registerDiscoveredBook(next, seenCfg, book, contextDir) {
+  const cfgKey = book.configAbs || dirKey(path.join(book.configDir, 'config_mdr.jsonc'));
+  if (seenCfg.has(cfgKey)) return;
+  seenCfg.add(cfgKey);
+  let id = book.id;
+  if (next.has(id)) {
+    const nextId = uniqueBookId(next, id, contextDir);
+    console.warn('[book] 书名 id 冲突，将 ' + book.configDir + ' 记为 ' + nextId);
+    id = nextId;
+    book.id = id;
+  }
+  const prev = books.get(id);
+  if (prev && rootsKey(prev.contentRoots) === rootsKey(book.contentRoots) && prev.watchers && prev.watchers.length) {
+    book.watchers = prev.watchers;
+    book.watchTimer = prev.watchTimer;
+    prev.watchers = [];
+  } else {
+    startWatch(book);
+  }
+  next.set(id, book);
 }
 
 function stopWatch(book) {
@@ -276,7 +584,8 @@ function startWatch(book) {
 function discoverBooks() {
   loadReaderConfig();
   const next = new Map();
-  if (!booksRoots.length) {
+  const seenCfg = new Set();
+  if (!booksRoots.length && !extraBookConfigs.length) {
     for (const old of books.values()) stopWatch(old);
     books = next;
     return;
@@ -300,32 +609,20 @@ function discoverBooks() {
       const cfgAbs = firstExistingFile(dirAbs, ['config_mdr.jsonc', 'config_mdr.json']);
       if (!cfgAbs) continue;
       try {
-        const book = parseBookConfig(cfgAbs, name);
-        let id = book.id;
-        if (next.has(id)) {
-          const suffix = path.basename(booksRoot);
-          id = suffix + '__' + name;
-          let n = 2;
-          while (next.has(id)) {
-            id = suffix + '__' + name + '_' + n;
-            n += 1;
-          }
-          console.warn('[book] 书名 id 冲突，将 ' + dirAbs + ' 记为 ' + id);
-          book.id = id;
-        }
-        const prev = books.get(id);
-        if (prev && rootsKey(prev.contentRoots) === rootsKey(book.contentRoots) && prev.watchers && prev.watchers.length) {
-          book.watchers = prev.watchers;
-          book.watchTimer = prev.watchTimer;
-          prev.watchers = [];
-        } else {
-          startWatch(book);
-        }
-        next.set(id, book);
+        registerDiscoveredBook(next, seenCfg, parseBookConfig(cfgAbs, name), booksRoot);
       } catch (err) {
         console.warn('[book] 跳过 ' + name + '：' + err.message);
       }
     }
+  }
+
+  for (const cfgAbs of extraBookConfigs) {
+    const book = tryLoadExtraBook(cfgAbs);
+    if (!book) {
+      console.warn('[book] 忽略不符合格式的书籍配置：' + cfgAbs);
+      continue;
+    }
+    registerDiscoveredBook(next, seenCfg, book, path.dirname(cfgAbs));
   }
 
   for (const [id, old] of books) {
@@ -334,14 +631,130 @@ function discoverBooks() {
   books = next;
 }
 
+function statSig(abs) {
+  try {
+    const st = fs.statSync(abs);
+    return abs + ':' + st.mtimeMs + ':' + st.size;
+  } catch {
+    return abs + ':missing';
+  }
+}
+
+function isWatchedConfigName(name) {
+  if (!name) return false;
+  const n = String(name);
+  return /\.jsonc$/i.test(n) || /^(config|config_mdr)\.json$/i.test(n);
+}
+
+function configSnapshot() {
+  const parts = [];
+  const main = firstExistingFile(ROOT, ['config.jsonc', 'config.json']);
+  parts.push(statSig(main || path.join(ROOT, 'config.jsonc')));
+  for (const dir of booksRoots) {
+    parts.push(statSig(dir));
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    names.sort(naturalCompare);
+    for (const name of names) {
+      if (isAlwaysIgnoredName(name)) continue;
+      const child = path.join(dir, name);
+      parts.push(statSig(child));
+      const cfg = firstExistingFile(child, ['config_mdr.jsonc', 'config_mdr.json', 'config.jsonc', 'config.json']);
+      if (cfg) parts.push(statSig(cfg));
+    }
+  }
+  for (const fileAbs of extraBookConfigs) parts.push(statSig(fileAbs));
+  for (const dir of booksCfgWatchDirs) parts.push(statSig(dir));
+  for (const fileAbs of relayConfigFiles) parts.push(statSig(fileAbs));
+  for (const book of books.values()) {
+    if (book.configAbs) parts.push(statSig(book.configAbs));
+  }
+  return parts.join('\n');
+}
+
+function markConfigDirty() {
+  if (Date.now() < ignoreWatchUntil) return;
+  configDirty = true;
+  if (configWatchTimer) clearTimeout(configWatchTimer);
+  configWatchTimer = setTimeout(() => {
+    try {
+      ensureFreshBooks();
+    } catch (err) {
+      console.warn('[config] 热更新失败：' + err.message);
+    }
+  }, 200);
+}
+
+function stopConfigWatchers() {
+  for (const watcher of configWatchers) {
+    try { watcher.close(); } catch (_) { /* ignore */ }
+  }
+  configWatchers = [];
+}
+
+function syncConfigWatchers() {
+  ignoreWatchUntil = Date.now() + 400;
+  stopConfigWatchers();
+  const dirs = new Set();
+  dirs.add(ROOT);
+  for (const dir of booksRoots) dirs.add(dir);
+  for (const dir of booksCfgWatchDirs) dirs.add(dir);
+  for (const fileAbs of extraBookConfigs) dirs.add(path.dirname(fileAbs));
+  for (const fileAbs of relayConfigFiles) dirs.add(path.dirname(fileAbs));
+  for (const book of books.values()) {
+    if (book.configAbs) dirs.add(path.dirname(book.configAbs));
+    if (book.configDir) dirs.add(book.configDir);
+  }
+  for (const dir of dirs) {
+    try {
+      const watcher = fs.watch(dir, (eventType, filename) => {
+        if (filename && isAlwaysIgnoredName(String(filename))) return;
+        const inRoot = booksRoots.some((root) => dir === root);
+        if (filename && !isWatchedConfigName(filename) && !inRoot && dir !== ROOT) return;
+        if (dir === ROOT && filename && !isWatchedConfigName(filename)) return;
+        markConfigDirty();
+      });
+      watcher.on('error', () => {});
+      configWatchers.push(watcher);
+    } catch (err) {
+      console.warn('[watch] 配置目录 ' + dir + '：' + err.message);
+    }
+  }
+}
+
+function ensureFreshBooks() {
+  if (configDiscovering) return;
+  const snap = configSnapshot();
+  if (!configDirty && configFingerprint && snap === configFingerprint) return;
+  configDiscovering = true;
+  try {
+    discoverBooks();
+    const nextSnap = configSnapshot();
+    if (nextSnap !== configFingerprint) {
+      const first = !configFingerprint;
+      configFingerprint = nextSnap;
+      configRevision += 1;
+      if (!first) {
+        console.log('[config] 已热更新，当前 ' + books.size + ' 本书');
+      }
+    } else {
+      configFingerprint = nextSnap;
+    }
+    configDirty = false;
+    syncConfigWatchers();
+  } finally {
+    configDiscovering = false;
+  }
+}
+
 function getBook(id) {
   if (!id) return null;
-  let book = books.get(id);
-  if (!book) {
-    discoverBooks();
-    book = books.get(id);
-  }
-  return book || null;
+  ensureFreshBooks();
+  return books.get(id) || null;
 }
 
 function bookPublic(book) {
@@ -562,17 +975,19 @@ app.get('/', (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
 app.get('/index.html', (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
 
 app.get('/api/status', (req, res) => {
-  discoverBooks();
+  ensureFreshBooks();
   res.json({
     ok: !booksRootError,
     error: booksRootError,
     booksRoot: booksRoots,
-    bookCount: books.size
+    booksCfg: extraBookConfigs,
+    bookCount: books.size,
+    revision: configRevision
   });
 });
 
 app.get('/api/books', (req, res) => {
-  discoverBooks();
+  ensureFreshBooks();
   if (booksRootError) {
     return res.status(500).json({ error: booksRootError, books: [] });
   }
@@ -696,7 +1111,7 @@ app.get('/content/:id/*', (req, res) => {
   return res.status(404).end();
 });
 
-discoverBooks();
+ensureFreshBooks();
 
 (async () => {
   const portArg = process.argv.find((a) => a.startsWith('--port='));
@@ -708,7 +1123,8 @@ discoverBooks();
     if (booksRootError) {
       console.warn('[config] ' + booksRootError);
     } else {
-      console.log('书籍根目录: ' + booksRoots.join(' | '));
+      if (booksRoots.length) console.log('书籍根目录: ' + booksRoots.join(' | '));
+      if (extraBookConfigs.length) console.log('补充书籍配置: ' + extraBookConfigs.length + ' 个');
       console.log('已发现 ' + books.size + ' 本书');
     }
     if (process.argv.includes('--open')) {

@@ -50,6 +50,7 @@ const App = (() => {
     window.addEventListener('popstate', () => { _isPopState = true; });
     window.addEventListener('hashchange', _onHashChange);
     await _onHashChange();
+    _setupConfigHotReload();
   }
 
   function _setupSidebarToggle() {
@@ -116,7 +117,7 @@ const App = (() => {
       const bookId = _resumeBookId;
       const hist = bookId ? ReadingHistory.get(bookId) : null;
       _hideResumeModal();
-      if (!bookId || !hist) return;
+      if (!bookId || !hist || !_historyBelongsToBook(hist)) return;
       _pendingHistoryScroll = { y: hist.scrollY || 0 };
       window.location.replace(_bookHref(bookId, hist.docPath, hist.anchor));
     });
@@ -124,6 +125,14 @@ const App = (() => {
       const bookId = _resumeBookId;
       _hideResumeModal();
       if (bookId) window.location.replace(_landingHash(bookId));
+    });
+    document.getElementById('resume-close').addEventListener('click', () => {
+      _hideResumeModal();
+      if (_parseHash().view === 'enter') {
+        history.replaceState(null, '', '#home');
+        _previousHash = 'home';
+        _previousRouteKey = 'home';
+      }
     });
   }
 
@@ -153,6 +162,16 @@ const App = (() => {
     return docPath === HOME_PATH || docPath === '__home';
   }
 
+  function _historyBelongsToBook(hist) {
+    if (!hist || !hist.docPath) return false;
+    if (hist.bookName && _bookMeta && _bookMeta.name && hist.bookName !== _bookMeta.name) {
+      return false;
+    }
+    if (_isHomePath(hist.docPath)) return true;
+    const files = Nav.getFlatFiles();
+    return files.some((f) => f.path === hist.docPath);
+  }
+
   function _normDocPath(docPath) {
     return _isHomePath(docPath) ? HOME_PATH : docPath;
   }
@@ -174,6 +193,62 @@ const App = (() => {
     const first = Nav.getFirstDocPath();
     if (first) return _bookHref(bookId, first);
     return _bookHref(bookId, HOME_PATH);
+  }
+
+  function _setupConfigHotReload() {
+    let revision = null;
+    let busy = false;
+    const poll = async () => {
+      if (busy) return;
+      try {
+        const resp = await fetch('/api/status');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const next = data && data.revision;
+        if (next == null) return;
+        if (revision == null) {
+          revision = next;
+          return;
+        }
+        if (next === revision) return;
+        revision = next;
+        busy = true;
+        await _applyConfigHotReload();
+      } catch (_) {
+        /* 热更新轮询失败时等下一轮 */
+      } finally {
+        busy = false;
+      }
+    };
+    setInterval(poll, 2000);
+    window.addEventListener('focus', poll);
+  }
+
+  async function _applyConfigHotReload() {
+    const route = _parseHash();
+    if (route.view === 'shelf' || !route.bookId) {
+      await Bookshelf.load();
+      return;
+    }
+    const y = window.scrollY;
+    _treeLoadedFor = '';
+    const ok = await ensureBook(route.bookId, { force: true });
+    if (!ok) return;
+    if (route.view === 'enter') {
+      await Bookshelf.load();
+      return;
+    }
+    _setView('reader', _bookMeta.name);
+    if (route.view === 'search') {
+      if (route.query) await Search.executeSearch(route.bookId, route.query);
+      return;
+    }
+    if (route.docPath) {
+      _currentDocPath = route.docPath;
+      Nav.highlight(route.docPath);
+      await _loadDoc(route.bookId, route.docPath);
+      window.scrollTo({ top: y, behavior: 'instant' });
+    }
   }
 
   function _setupTopbarHeight() {
@@ -237,11 +312,14 @@ const App = (() => {
     const searchInput = document.getElementById('top-search-input');
     const shelf = document.getElementById('bookshelf-view');
     const reader = document.getElementById('reader-view');
+    const notfound = document.getElementById('notfound-view');
     const bookRow = document.getElementById('topbar-book-row');
     const bookTitle = document.getElementById('book-title-bar');
 
+    if (notfound) notfound.hidden = mode !== 'notfound';
+
     if (mode === 'shelf') {
-      document.body.classList.remove('view-reader', 'sidebar-open');
+      document.body.classList.remove('view-reader', 'view-notfound', 'sidebar-open');
       document.body.classList.add('view-bookshelf');
       shelf.hidden = false;
       reader.hidden = true;
@@ -249,18 +327,30 @@ const App = (() => {
       title.href = '#home';
       searchInput.placeholder = '搜索书籍名称、作者...';
       if (bookRow) bookRow.hidden = true;
-    } else {
-      document.body.classList.remove('view-bookshelf');
-      document.body.classList.add('view-reader');
-      if (window.innerWidth > 768) document.body.classList.add('sidebar-open');
+      return;
+    }
+
+    if (mode === 'notfound') {
+      document.body.classList.remove('view-reader', 'view-bookshelf', 'sidebar-open');
+      document.body.classList.add('view-notfound');
       shelf.hidden = true;
-      reader.hidden = false;
+      reader.hidden = true;
       title.textContent = '返回书架';
       title.href = '#home';
-      searchInput.placeholder = '搜索文档内容...';
-      if (bookRow) bookRow.hidden = false;
-      if (bookTitle) bookTitle.textContent = bookName || (_bookMeta && _bookMeta.name) || '';
+      if (bookRow) bookRow.hidden = true;
+      return;
     }
+
+    document.body.classList.remove('view-bookshelf', 'view-notfound');
+    document.body.classList.add('view-reader');
+    if (window.innerWidth > 768) document.body.classList.add('sidebar-open');
+    shelf.hidden = true;
+    reader.hidden = false;
+    title.textContent = '返回书架';
+    title.href = '#home';
+    searchInput.placeholder = '搜索文档内容...';
+    if (bookRow) bookRow.hidden = false;
+    if (bookTitle) bookTitle.textContent = bookName || (_bookMeta && _bookMeta.name) || '';
   }
 
   function _getRouteKey(route) {
@@ -294,16 +384,37 @@ const App = (() => {
     _isNavClick = false;
   }
 
-  async function ensureBook(bookId) {
-    if (_treeLoadedFor === bookId && _bookMeta) return true;
+  function _handleMissingBook(bookId) {
+    const hist = ReadingHistory.get(bookId);
+    const name = (hist && hist.bookName) || bookId;
+    ReadingHistory.remove(bookId);
+    Bookshelf.refreshHistory();
+    _bookMeta = null;
+    _bookId = '';
+    _treeLoadedFor = '';
+    _currentDocPath = null;
+    _hideResumeModal();
+    _hideLoading();
+    const nameEl = document.getElementById('notfound-book-name');
+    if (nameEl) nameEl.textContent = name;
+    _setView('notfound');
+  }
+
+  async function ensureBook(bookId, opts) {
+    if (!(opts && opts.force) && _treeLoadedFor === bookId && _bookMeta) return true;
     try {
       const [metaResp, treeResp] = await Promise.all([
         fetch('/api/books/' + encodeURIComponent(bookId)),
         fetch('/api/books/' + encodeURIComponent(bookId) + '/tree')
       ]);
+      if (metaResp.status === 404 || treeResp.status === 404) {
+        _handleMissingBook(bookId);
+        return false;
+      }
       if (!metaResp.ok || !treeResp.ok) throw new Error('load book failed');
       _bookMeta = await metaResp.json();
       const treeData = await treeResp.json();
+      if (_bookId && _bookId !== bookId) _currentDocPath = null;
       _bookId = bookId;
       _hasHomeReadme = !!treeData.hasHomeReadme;
       Nav.init(treeData.tree || [], { hasHomeReadme: _hasHomeReadme, bookId });
@@ -330,6 +441,7 @@ const App = (() => {
         ReadingHistory.record({
           bookId: _bookId,
           bookName: _bookMeta && _bookMeta.name,
+          coverUrl: _bookMeta && _bookMeta.coverUrl,
           docPath: _currentDocPath,
           docTitle: _docTitle(_currentDocPath),
           scrollY: window.scrollY
@@ -356,30 +468,26 @@ const App = (() => {
       return;
     }
 
+    const ok = await ensureBook(route.bookId, { force: route.view === 'enter' });
+    if (!ok) {
+      _commitNavigation(fullHash, routeKey);
+      return;
+    }
+
     if (route.view === 'enter') {
-      const ok = await ensureBook(route.bookId);
-      if (!ok) {
-        _commitNavigation(fullHash, routeKey);
-        return;
-      }
       const hist = ReadingHistory.get(route.bookId);
-      if (hist && hist.docPath) {
+      if (hist && _historyBelongsToBook(hist)) {
         _setView('shelf');
         _showResumeModal(route.bookId, hist);
         _hideLoading();
         _commitNavigation(fullHash, routeKey);
         return;
       }
+      if (hist) ReadingHistory.remove(route.bookId);
       window.location.replace(_landingHash(route.bookId));
       return;
     }
 
-    _setView('reader', _bookMeta && _bookId === route.bookId ? _bookMeta.name : '');
-    const ok = await ensureBook(route.bookId);
-    if (!ok) {
-      _commitNavigation(fullHash, routeKey);
-      return;
-    }
     _setView('reader', _bookMeta.name);
     _hideResumeModal();
 
@@ -407,6 +515,7 @@ const App = (() => {
     ReadingHistory.record({
       bookId: route.bookId,
       bookName: _bookMeta && _bookMeta.name,
+      coverUrl: _bookMeta && _bookMeta.coverUrl,
       docPath: route.docPath,
       docTitle: _docTitle(route.docPath),
       scrollY: 0
