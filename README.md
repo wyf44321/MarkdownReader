@@ -30,7 +30,7 @@
 
 接力：在每个已列入的 `booksRoot` 目录自身及其一层子目录里查找 `config.jsonc`（或旧的 `config.json`）。**只合并数组字段**（`booksRoot`、`booksCfg`），按真实路径去重并继续接力。接力文件里的其它字段即使写了也不生效，一律以 `MarkdownReader/config.jsonc` 为准。
 
-`booksCfg` 用来补充书籍定义，不必使用 `config_mdr.jsonc` 这个文件名；可用通配符（如 `./cfgs/*.jsonc`、`./cfgs/**/*.jsonc`）。内容需符合书籍配置格式（`name` / `path` / `cover` / `meta` / `exclude` / `features`），否则忽略。同一文件若已通过目录扫描发现，不会重复加入。这类书的 id 取配置文件名（去掉后缀），避免同一目录下多本书抢同一个 id。
+`booksCfg` 用来补充书籍定义，不必使用 `config_mdr.jsonc` 这个文件名；可用通配符（如 `./cfgs/*.jsonc`、`./cfgs/**/*.jsonc`）。内容需符合书籍配置格式（`name` / `path` / `cover` / `home` / `meta` / `exclude` / `features`），否则忽略。同一文件若已通过目录扫描发现，不会重复加入。这类书的 id 取配置文件名（去掉后缀），避免同一目录下多本书抢同一个 id。
 
 若某个目录里只有旧的 `config.json` / `config_mdr.json`，运行时仍会读取；带注释时请改用 `.jsonc`。
 
@@ -50,7 +50,8 @@
 
 - 首页自上而下：书籍搜索 → 阅读历史 → 全部书籍（一行最多 5 本）。
 - 点某本书进入阅读。若有上次记录，会询问是否回到上次位置。
-- 书籍根目录有 `README.md`（大小写不敏感）时，默认打开它，侧栏第一行是「首页」。
+- 书籍配置可写 `home`（相对书根的 md 路径）指定进书首页，也可以写到书根外（例如 `../README.md`）。文件存在则打开它，侧栏第一行是「首页」。
+- 未写 `home` 或文件不存在时：书根有 `README.md`（大小写不敏感）则打开它并显示「首页」；否则直接打开第一篇文档。
 - 目录行点击只展开/折叠。若该目录有 README，右侧按钮才打开说明文档；README 本身不出现在文件列表里。
 - `UseTitleAsFileName` / `UseTitleAsSectionName` 打开后，侧栏主标题用一级标题，文件名/目录名作为副标题。
 

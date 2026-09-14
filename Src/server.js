@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '..');
 const ALWAYS_IGNORED = new Set(['.git', '.vscode', 'node_modules']);
 
 const READER_ARRAY_FIELDS = ['booksRoot', 'booksCfg'];
-const BOOK_SHAPE_FIELDS = ['name', 'path', 'cover', 'meta', 'exclude', 'features'];
+const BOOK_SHAPE_FIELDS = ['name', 'path', 'cover', 'home', 'meta', 'exclude', 'features'];
 
 let booksRoots = [];
 let extraBookConfigs = [];
@@ -292,8 +292,45 @@ function rootsKey(roots) {
   return (roots || []).slice().sort().join('|');
 }
 
+function resolveConfiguredHome(book) {
+  const raw = book.homeRel && String(book.homeRel).trim();
+  if (!raw) return null;
+  const rel = toPosix(raw);
+  if (!rel || rel === '.') return null;
+  const withMd = /\.md$/i.test(rel) ? rel : rel + '.md';
+  const noExt = withMd.replace(/\.md$/i, '');
+
+  for (const root of book.contentRoots) {
+    const abs = path.resolve(root, withMd);
+    try {
+      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) return abs;
+    } catch { /* 继续试大小写不敏感 */ }
+
+    const dir = path.dirname(path.resolve(root, noExt));
+    const last = path.basename(noExt);
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch { continue; }
+    const want = last.toLowerCase() + '.md';
+    const found = entries.find((e) => e.toLowerCase() === want);
+    if (!found) continue;
+    const cand = path.join(dir, found);
+    try {
+      if (fs.statSync(cand).isFile()) return cand;
+    } catch { /* 下一根 */ }
+  }
+  return null;
+}
+
 function refreshHomeReadme(book) {
   book.homeReadmeAbs = null;
+  if (book.homeRel) {
+    const configured = resolveConfiguredHome(book);
+    if (configured) {
+      book.homeReadmeAbs = configured;
+      book.hasHomeReadme = true;
+      return;
+    }
+  }
   for (const root of book.contentRoots) {
     const found = findReadmeFile(root);
     if (found) {
@@ -432,6 +469,7 @@ function isBookConfigShape(raw) {
   if (raw.cover != null && typeof raw.cover !== 'string') return false;
   if (raw.path != null && typeof raw.path !== 'string' && !Array.isArray(raw.path)) return false;
   if (raw.meta != null && !isPlainObject(raw.meta)) return false;
+  if (raw.home != null && typeof raw.home !== 'string') return false;
   if (raw.exclude != null && !Array.isArray(raw.exclude)) return false;
   if (raw.features != null && !isPlainObject(raw.features)) return false;
   return true;
@@ -463,6 +501,7 @@ function parseBookConfig(configAbs, folderName) {
   const features = raw.features && typeof raw.features === 'object' ? raw.features : {};
   const meta = raw.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta) ? raw.meta : {};
   const exclude = Array.isArray(raw.exclude) ? raw.exclude.map(String) : [];
+  const homeRel = raw.home != null ? String(raw.home).trim() : '';
   const book = {
     id: folderName,
     name: raw.name && String(raw.name).trim() ? String(raw.name).trim() : folderName,
@@ -471,6 +510,7 @@ function parseBookConfig(configAbs, folderName) {
     contentRoots,
     coverAbs,
     hasCover: !!coverAbs,
+    homeRel,
     meta,
     exclude,
     features: {
@@ -484,6 +524,9 @@ function parseBookConfig(configAbs, folderName) {
     watchTimer: null
   };
   refreshHomeReadme(book);
+  if (homeRel && !resolveConfiguredHome(book)) {
+    console.warn('[book] ' + folderName + ' 指定的首页不存在，已回退默认规则：' + homeRel);
+  }
   return book;
 }
 
@@ -876,6 +919,29 @@ function getBookTree(book) {
   return book.treeCache;
 }
 
+/** 首页文件相对书根的位置，供正文链接按真实目录解析。 */
+function homeNavInfo(book) {
+  refreshHomeReadme(book);
+  const contentRootBases = (book.contentRoots || []).map((root) => path.basename(root));
+  const info = {
+    homeRel: '',
+    homeDirRel: '',
+    contentRootBase: contentRootBases[0] || '',
+    contentRootBases
+  };
+  if (!book.homeReadmeAbs) return info;
+  for (const root of book.contentRoots) {
+    const fileRel = toPosix(path.relative(root, book.homeReadmeAbs));
+    if (!fileRel || path.isAbsolute(fileRel)) continue;
+    const dirRel = toPosix(path.relative(root, path.dirname(book.homeReadmeAbs)));
+    info.homeRel = stripMdExt(fileRel);
+    info.homeDirRel = !dirRel || dirRel === '.' ? '' : dirRel;
+    info.contentRootBase = path.basename(root);
+    break;
+  }
+  return info;
+}
+
 function resolveDocInRoot(book, root, normalized) {
   const absNoExt = path.resolve(root, normalized);
   if (!isInside(root, absNoExt)) return null;
@@ -1005,8 +1071,13 @@ app.get('/api/books/:id/tree', (req, res) => {
   const book = getBook(req.params.id);
   if (!book) return res.status(404).json({ error: '未找到书籍' });
   const tree = getBookTree(book);
+  const homeNav = homeNavInfo(book);
   res.json({
     hasHomeReadme: book.hasHomeReadme,
+    homeRel: homeNav.homeRel,
+    homeDirRel: homeNav.homeDirRel,
+    contentRootBase: homeNav.contentRootBase,
+    contentRootBases: homeNav.contentRootBases,
     features: book.features,
     tree
   });

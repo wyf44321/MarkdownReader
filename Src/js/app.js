@@ -4,6 +4,10 @@ const App = (() => {
   let _bookId = '';
   let _bookMeta = null;
   let _hasHomeReadme = false;
+  let _homeDirRel = '';
+  let _homeRel = '';
+  let _contentRootBase = '';
+  let _contentRootBases = [];
   let _treeLoadedFor = '';
   let _currentDocPath = null;
   let _previousHash = null;
@@ -14,6 +18,9 @@ const App = (() => {
   let _pendingHistoryScroll = null;
   let _scrollTimer = null;
   let _resumeBookId = null;
+  let _linkChain = [];
+  let _incomingPush = null;
+  let _incomingPop = false;
 
   function isBookshelf() {
     return document.body.classList.contains('view-bookshelf');
@@ -25,6 +32,37 @@ const App = (() => {
 
   function setNavClick(val) {
     _isNavClick = val;
+    if (val) _clearLinkChain();
+  }
+
+  function _clearLinkChain() {
+    _linkChain = [];
+    _incomingPush = null;
+    _incomingPop = false;
+  }
+
+  function _chainTip() {
+    return _linkChain.length ? _linkChain[_linkChain.length - 1] : null;
+  }
+
+  function _applyLinkChain(route) {
+    const snapshot = _linkChain.slice();
+    if (_incomingPop) {
+      if (_linkChain.length) _linkChain.pop();
+    } else if (_incomingPush && _incomingPush.docPath && _incomingPush.docPath !== route.docPath) {
+      _linkChain.push(_incomingPush);
+    } else if (_isPopState) {
+      const tip = _chainTip();
+      if (tip && tip.bookId === route.bookId && tip.docPath === route.docPath) {
+        _linkChain.pop();
+      } else {
+        const idx = _linkChain.findIndex((e) => e.bookId === route.bookId && e.docPath === route.docPath);
+        _linkChain = idx >= 0 ? _linkChain.slice(0, idx) : [];
+      }
+    }
+    _incomingPush = null;
+    _incomingPop = false;
+    return snapshot;
   }
 
   async function init() {
@@ -41,11 +79,14 @@ const App = (() => {
     _setupScrollRecord();
     _setupTopbarHeight();
 
-    document.getElementById('site-title').addEventListener('click', (e) => {
-      if (isBookshelf()) return;
-      e.preventDefault();
-      window.location.hash = '#home';
-    });
+    const backToShelf = document.getElementById('back-to-shelf');
+    if (backToShelf) {
+      backToShelf.addEventListener('click', () => {
+        if (isBookshelf()) return;
+        _goToBookshelf();
+      });
+    }
+    _setupContentLinkTracking();
 
     window.addEventListener('popstate', () => { _isPopState = true; });
     window.addEventListener('hashchange', _onHashChange);
@@ -138,12 +179,46 @@ const App = (() => {
 
   function _setupScrollRecord() {
     window.addEventListener('scroll', () => {
-      if (isBookshelf() || !_bookId || !_currentDocPath) return;
+      if (isBookshelf()) {
+        _scrollPositions.home = window.scrollY;
+        return;
+      }
+      if (!_bookId || !_currentDocPath) return;
       clearTimeout(_scrollTimer);
       _scrollTimer = setTimeout(() => {
         ReadingHistory.updateScroll(_bookId, window.scrollY);
       }, 300);
     }, { passive: true });
+  }
+
+  function _setupContentLinkTracking() {
+    const container = document.getElementById('doc-content');
+    if (!container) return;
+    container.addEventListener('click', (e) => {
+      const a = e.target.closest('a[href]');
+      if (!a || a.closest('.doc-prev-next')) return;
+      const href = a.getAttribute('href') || '';
+      if (!href.startsWith('#book/')) return;
+      const dest = _parseHashString(href);
+      if (dest.view !== 'doc' || dest.bookId !== _bookId) return;
+      if (dest.docPath === _currentDocPath) return;
+      if (!_currentDocPath) return;
+      _incomingPop = false;
+      _incomingPush = {
+        bookId: _bookId,
+        docPath: _currentDocPath,
+        title: _isHomePath(_currentDocPath) ? '返回首页' : _docTitle(_currentDocPath),
+        scrollY: window.scrollY,
+        href: window.location.hash || '#home'
+      };
+    });
+  }
+
+  function _goToBookshelf() {
+    const saved = _scrollPositions.home;
+    if (saved !== undefined) _pendingHistoryScroll = { y: saved };
+    setNavClick(true);
+    window.location.hash = '#home';
   }
 
   function _showResumeModal(bookId, hist) {
@@ -264,7 +339,11 @@ const App = (() => {
   }
 
   function _parseHash() {
-    const hash = window.location.hash.slice(1);
+    return _parseHashString(window.location.hash);
+  }
+
+  function _parseHashString(raw) {
+    const hash = String(raw || '').replace(/^#/, '');
     const qIdx = hash.indexOf('?');
     const pathPart = qIdx === -1 ? hash : hash.slice(0, qIdx);
     const queryStr = qIdx === -1 ? '' : hash.slice(qIdx + 1);
@@ -308,13 +387,12 @@ const App = (() => {
   }
 
   function _setView(mode, bookName) {
-    const title = document.getElementById('site-title');
     const searchInput = document.getElementById('top-search-input');
     const shelf = document.getElementById('bookshelf-view');
     const reader = document.getElementById('reader-view');
     const notfound = document.getElementById('notfound-view');
-    const bookRow = document.getElementById('topbar-book-row');
     const bookTitle = document.getElementById('book-title-bar');
+    const backToShelf = document.getElementById('back-to-shelf');
 
     if (notfound) notfound.hidden = mode !== 'notfound';
 
@@ -323,10 +401,13 @@ const App = (() => {
       document.body.classList.add('view-bookshelf');
       shelf.hidden = false;
       reader.hidden = true;
-      title.textContent = 'Markdown 阅读器';
-      title.href = '#home';
       searchInput.placeholder = '搜索书籍名称、作者...';
-      if (bookRow) bookRow.hidden = true;
+      if (bookTitle) {
+        bookTitle.hidden = false;
+        bookTitle.textContent = 'MD阅读器';
+        bookTitle.title = 'MD阅读器';
+      }
+      if (backToShelf) backToShelf.hidden = true;
       return;
     }
 
@@ -335,9 +416,12 @@ const App = (() => {
       document.body.classList.add('view-notfound');
       shelf.hidden = true;
       reader.hidden = true;
-      title.textContent = '返回书架';
-      title.href = '#home';
-      if (bookRow) bookRow.hidden = true;
+      if (bookTitle) {
+        bookTitle.hidden = true;
+        bookTitle.textContent = '';
+        bookTitle.removeAttribute('title');
+      }
+      if (backToShelf) backToShelf.hidden = false;
       return;
     }
 
@@ -346,11 +430,15 @@ const App = (() => {
     if (window.innerWidth > 768) document.body.classList.add('sidebar-open');
     shelf.hidden = true;
     reader.hidden = false;
-    title.textContent = '返回书架';
-    title.href = '#home';
     searchInput.placeholder = '搜索文档内容...';
-    if (bookRow) bookRow.hidden = false;
-    if (bookTitle) bookTitle.textContent = bookName || (_bookMeta && _bookMeta.name) || '';
+    const name = bookName || (_bookMeta && _bookMeta.name) || '';
+    if (bookTitle) {
+      bookTitle.hidden = !name;
+      bookTitle.textContent = name;
+      if (name) bookTitle.title = name;
+      else bookTitle.removeAttribute('title');
+    }
+    if (backToShelf) backToShelf.hidden = false;
   }
 
   function _getRouteKey(route) {
@@ -368,6 +456,15 @@ const App = (() => {
     }
     if (_isPopState && !_isNavClick) {
       const saved = _scrollPositions[fullHash];
+      if (saved !== undefined) {
+        setTimeout(() => window.scrollTo({ top: saved, behavior: 'instant' }), 50);
+        return;
+      }
+    }
+    if (isBookshelf()) {
+      const saved = _scrollPositions[fullHash] !== undefined
+        ? _scrollPositions[fullHash]
+        : _scrollPositions.home;
       if (saved !== undefined) {
         setTimeout(() => window.scrollTo({ top: saved, behavior: 'instant' }), 50);
         return;
@@ -391,8 +488,14 @@ const App = (() => {
     Bookshelf.refreshHistory();
     _bookMeta = null;
     _bookId = '';
+    _hasHomeReadme = false;
+    _homeDirRel = '';
+    _homeRel = '';
+    _contentRootBase = '';
+    _contentRootBases = [];
     _treeLoadedFor = '';
     _currentDocPath = null;
+    _clearLinkChain();
     _hideResumeModal();
     _hideLoading();
     const nameEl = document.getElementById('notfound-book-name');
@@ -414,9 +517,16 @@ const App = (() => {
       if (!metaResp.ok || !treeResp.ok) throw new Error('load book failed');
       _bookMeta = await metaResp.json();
       const treeData = await treeResp.json();
-      if (_bookId && _bookId !== bookId) _currentDocPath = null;
+      if (_bookId && _bookId !== bookId) {
+        _currentDocPath = null;
+        _clearLinkChain();
+      }
       _bookId = bookId;
       _hasHomeReadme = !!treeData.hasHomeReadme;
+      _homeDirRel = treeData.homeDirRel || '';
+      _homeRel = treeData.homeRel || '';
+      _contentRootBase = treeData.contentRootBase || '';
+      _contentRootBases = Array.isArray(treeData.contentRootBases) ? treeData.contentRootBases : [];
       Nav.init(treeData.tree || [], { hasHomeReadme: _hasHomeReadme, bookId });
       _treeLoadedFor = bookId;
       return true;
@@ -450,6 +560,7 @@ const App = (() => {
     }
 
     if (route.view === 'shelf') {
+      _clearLinkChain();
       _hideResumeModal();
       _currentDocPath = null;
       _setView('shelf');
@@ -477,6 +588,11 @@ const App = (() => {
     if (route.view === 'enter') {
       const hist = ReadingHistory.get(route.bookId);
       if (hist && _historyBelongsToBook(hist)) {
+        if (_isHomePath(hist.docPath)) {
+          _pendingHistoryScroll = { y: hist.scrollY || 0 };
+          window.location.replace(_landingHash(route.bookId));
+          return;
+        }
         _setView('shelf');
         _showResumeModal(route.bookId, hist);
         _hideLoading();
@@ -492,6 +608,7 @@ const App = (() => {
     _hideResumeModal();
 
     if (route.view === 'search') {
+      _clearLinkChain();
       _currentDocPath = null;
       Nav.clearHighlight();
       _hideLoading();
@@ -509,9 +626,27 @@ const App = (() => {
       return;
     }
 
+    const prevDocPath = _currentDocPath;
+    const canReturnToPrev = _previousHash !== null;
+    const returnHash = _previousHash;
+    const returnScroll = window.scrollY;
+    const chainBefore = _applyLinkChain(route);
     _currentDocPath = route.docPath;
     Nav.highlight(route.docPath);
-    await _loadDoc(route.bookId, route.docPath);
+    const loaded = await _loadDoc(route.bookId, route.docPath);
+    if (!loaded) {
+      _linkChain = chainBefore;
+      _currentDocPath = null;
+      if (prevDocPath) Nav.highlight(prevDocPath);
+      _showDocNotFound({
+        bookId: route.bookId,
+        canReturnToPrev,
+        returnHash,
+        returnScroll
+      });
+      _commitNavigation(fullHash, routeKey);
+      return;
+    }
     ReadingHistory.record({
       bookId: route.bookId,
       bookName: _bookMeta && _bookMeta.name,
@@ -539,11 +674,16 @@ const App = (() => {
       if (!resp.ok) throw new Error('Document not found');
       const markdown = await resp.text();
       const container = document.getElementById('doc-content');
-      const pathParts = _isHomePath(docPath) ? [] : docPath.split('/');
-      const basePath = pathParts.length ? pathParts.slice(0, -1) : [];
+      const pathParts = _isHomePath(docPath) ? [] : String(docPath).split('/');
+      const baseDirRel = _isHomePath(docPath)
+        ? _homeDirRel
+        : pathParts.slice(0, -1).join('/');
       const route = 'book/' + bookId + '/' + docPath;
       container.innerHTML = DocRenderer.render(markdown, {
-        basePath: basePath,
+        baseDirRel: baseDirRel,
+        contentRootBase: _contentRootBase,
+        contentRootBases: _contentRootBases,
+        homeRel: _homeRel,
         route: route,
         hashPrefix: 'book/' + bookId,
         bookId: bookId
@@ -551,14 +691,41 @@ const App = (() => {
       _renderPrevNext(docPath, container, bookId);
       _hideLoading();
       await DocRenderer.postRender(container);
+      return true;
     } catch (err) {
-      document.getElementById('doc-content').innerHTML =
-        '<div style="text-align:center;padding:60px 20px;color:#6b7280;">' +
-        '<p style="font-size:1.2rem;">文档未找到</p>' +
-        '<p style="margin-top:8px;"><a href="#home">返回书架</a></p>' +
-        '</div>';
       _hideLoading();
+      return false;
     }
+  }
+
+  function _showDocNotFound(opts) {
+    const bookId = opts && opts.bookId;
+    const canReturnToPrev = !!(opts && opts.canReturnToPrev);
+    const returnHash = opts && opts.returnHash;
+    const returnScroll = (opts && opts.returnScroll) || 0;
+    const container = document.getElementById('doc-content');
+    container.innerHTML =
+      '<div style="text-align:center;padding:60px 20px;color:#6b7280;">' +
+      '<p style="font-size:1.2rem;">文档未找到</p>' +
+      '<p style="margin-top:8px;"><a href="#" id="doc-missing-back">返回上一位置</a></p>' +
+      '</div>';
+    const back = document.getElementById('doc-missing-back');
+    if (!back) return;
+    back.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (canReturnToPrev) {
+        _pendingHistoryScroll = { y: returnScroll };
+        if (window.history.length > 1) {
+          window.history.back();
+          return;
+        }
+        if (returnHash) {
+          window.location.hash = returnHash === 'home' ? '#home' : '#' + returnHash;
+          return;
+        }
+      }
+      if (bookId) window.location.replace(_landingHash(bookId));
+    });
   }
 
   function _createPrevNextNav(prev, next) {
@@ -571,7 +738,26 @@ const App = (() => {
       a.className = 'doc-prev-next-link prev';
       a.innerHTML = '<span class="doc-prev-next-label">上一篇</span>' +
         '<span class="doc-prev-next-title">' + _escHtml(prev.title) + '</span>';
-      a.addEventListener('click', () => App.setNavClick(true));
+      a.addEventListener('click', (e) => {
+        if (prev.goBookshelf) {
+          e.preventDefault();
+          _goToBookshelf();
+          return;
+        }
+        if (prev.fromChain) {
+          _incomingPop = true;
+          _incomingPush = null;
+          if (prev.restoreScroll != null) {
+            _pendingHistoryScroll = { y: prev.restoreScroll };
+          }
+          _isNavClick = true;
+          return;
+        }
+        if (prev.restoreScroll != null) {
+          _pendingHistoryScroll = { y: prev.restoreScroll };
+        }
+        setNavClick(true);
+      });
       nav.appendChild(a);
     } else {
       nav.appendChild(document.createElement('span'));
@@ -607,13 +793,20 @@ const App = (() => {
       }
     }
 
-    if (!prev) {
-      if (_isHomePath(docPath)) {
-        prev = { href: '#home', title: '返回书架' };
-      } else if (_hasHomeReadme) {
-        prev = { href: _bookHref(bookId, HOME_PATH), title: '返回首页' };
+    const tip = _chainTip();
+    if (tip && tip.docPath && tip.docPath !== docPath) {
+      prev = {
+        href: tip.href || _bookHref(bookId, tip.docPath),
+        title: tip.title || _docTitle(tip.docPath),
+        restoreScroll: tip.scrollY || 0,
+        fromChain: true
+      };
+      next = null;
+    } else if (!prev) {
+      if (_isHomePath(docPath) || !_hasHomeReadme) {
+        prev = { href: '#home', title: '返回书架', goBookshelf: true };
       } else {
-        prev = { href: '#home', title: '返回书架' };
+        prev = { href: _bookHref(bookId, HOME_PATH), title: '返回首页' };
       }
     }
 

@@ -2,11 +2,13 @@
  * 书架首页：搜索栏、阅读历史、书籍卡片网格。
  */
 const Bookshelf = (() => {
-  const PREVIEW_LIMIT = 5;
   let _books = [];
   let _query = '';
   let _historyExpanded = false;
+  let _historyPage = 1;
+  let _historyAnchorKey = null;
   let _onOpenBook = null;
+  let _resizeTimer = null;
 
   function init(onOpenBook) {
     _onOpenBook = onOpenBook;
@@ -22,9 +24,69 @@ const Bookshelf = (() => {
     if (moreBtn) {
       moreBtn.addEventListener('click', () => {
         _historyExpanded = !_historyExpanded;
+        _historyPage = 1;
+        _historyAnchorKey = null;
         _renderHistory();
       });
     }
+    const prevBtn = document.getElementById('history-prev');
+    const nextBtn = document.getElementById('history-next');
+    if (prevBtn) prevBtn.addEventListener('click', () => _stepPage(-1));
+    if (nextBtn) nextBtn.addEventListener('click', () => _stepPage(1));
+
+    window.addEventListener('resize', () => {
+      clearTimeout(_resizeTimer);
+      _resizeTimer = setTimeout(() => {
+        _renderHistory();
+        _applyTipVisibility(document.getElementById('book-grid'));
+      }, 120);
+    });
+  }
+
+  /** 一行能放下的卡片数 = 栅格实际列数，随窗口缩放变化 */
+  function _columnCount() {
+    const candidates = [
+      document.getElementById('history-preview'),
+      document.getElementById('history-paged'),
+      document.getElementById('book-grid')
+    ];
+    for (const el of candidates) {
+      if (!el || el.hidden || !el.isConnected) continue;
+      const cols = getComputedStyle(el).gridTemplateColumns;
+      if (!cols || cols === 'none' || cols.includes('repeat(')) continue;
+      const n = cols.split(' ').filter(Boolean).length;
+      if (n > 0) return n;
+    }
+    const w = window.innerWidth;
+    if (w <= 640) return 2;
+    if (w <= 900) return 3;
+    if (w <= 1100) return 4;
+    return 5;
+  }
+
+  function _stepPage(delta) {
+    const items = _historyItems();
+    const perPage = _columnCount();
+    const totalPages = Math.max(1, Math.ceil(items.length / perPage));
+    const current = _currentPage(items, perPage);
+    const next = Math.min(totalPages, Math.max(1, current + delta));
+    // 翻页后回到标准分页边界，并以该页首本书作为新锚点
+    _historyPage = next;
+    const first = items[(next - 1) * perPage];
+    _historyAnchorKey = first ? _historyKey(first) : null;
+    _renderHistory();
+  }
+
+  function _currentPage(items, perPage) {
+    const idx = _anchorIndex(items);
+    if (idx >= 0) return Math.floor(idx / perPage) + 1;
+    const totalPages = Math.max(1, Math.ceil(items.length / perPage));
+    return Math.min(totalPages, Math.max(1, _historyPage));
+  }
+
+  function _anchorIndex(items) {
+    if (!_historyAnchorKey) return -1;
+    return items.findIndex((it) => _historyKey(it) === _historyAnchorKey);
   }
 
   async function load() {
@@ -112,11 +174,12 @@ const Bookshelf = (() => {
     return el.innerHTML;
   }
 
-  function _metaRows(meta) {
-    const entries = Object.entries(meta || {});
+  /** 元信息区：最多展示 maxRows 行，超出部分只进浮窗 */
+  function _metaBlock(entries, maxRows) {
     if (!entries.length) return '';
-    const shown = entries.slice(0, 3);
-    const hasMore = entries.length > 3;
+    const limit = maxRows || entries.length;
+    const shown = entries.slice(0, limit);
+    const hasMore = entries.length > limit;
     let html = '<div class="book-meta">';
     shown.forEach(([k, v], i) => {
       const tail = (i === shown.length - 1 && hasMore)
@@ -137,6 +200,34 @@ const Bookshelf = (() => {
     }
     html += '</div></div>';
     return html;
+  }
+
+  function _metaRows(meta) {
+    return _metaBlock(Object.entries(meta || {}), 3);
+  }
+
+  /** 只有真的被省略（出现 ...）时才挂浮窗 */
+  function _applyTipVisibility(root) {
+    if (!root) return;
+    root.querySelectorAll('.book-meta').forEach((block) => {
+      const hasMore = !!block.querySelector('.book-meta-more');
+      const truncated = Array.from(block.querySelectorAll('.book-meta-row .meta-val'))
+        .some((el) => el.scrollWidth > el.clientWidth + 1);
+      block.classList.toggle('has-tip', hasMore || truncated);
+    });
+    root.querySelectorAll('.book-title, .history-title').forEach((el) => {
+      if (el.scrollWidth > el.clientWidth + 1) el.title = el.textContent;
+      else el.removeAttribute('title');
+    });
+  }
+
+  function _formatTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
   function _renderBooks() {
@@ -170,14 +261,19 @@ const Bookshelf = (() => {
       frag.appendChild(card);
     }
     grid.appendChild(frag);
+    _applyTipVisibility(grid);
+  }
+
+  function _historyKey(item) {
+    const book = _bookForHistory(item);
+    return (book && book.id) || item.bookName || item.bookId;
   }
 
   function _historyItems() {
     const seen = new Set();
     const items = [];
     for (const item of ReadingHistory.list()) {
-      const book = _bookForHistory(item);
-      const key = (book && book.id) || item.bookName || item.bookId;
+      const key = _historyKey(item);
       if (!key || seen.has(key)) continue;
       seen.add(key);
       items.push(item);
@@ -194,11 +290,14 @@ const Bookshelf = (() => {
     };
     const openId = (book && book.id) || item.bookId;
     const docLabel = (item.docPath === '#' || item.docPath === '__home') ? '首页' : (item.docTitle || item.docPath || '');
+    const entries = [['最后阅读位置', docLabel]];
+    const time = _formatTime(item.updatedAt);
+    if (time) entries.push(['最后阅读时间', time]);
     return '<button type="button" class="history-card" data-book-id="' + _esc(openId) + '">' +
       '<div class="history-cover">' + _coverHtml(coverBook, 'history') + '</div>' +
       '<div class="history-info">' +
       '<div class="history-title">' + _esc(name) + '</div>' +
-      '<div class="history-doc">' + _esc(docLabel) + '</div>' +
+      _metaBlock(entries) +
       '</div></button>';
   }
 
@@ -213,9 +312,10 @@ const Bookshelf = (() => {
   function _renderHistory() {
     const section = document.getElementById('history-section');
     const preview = document.getElementById('history-preview');
-    const grouped = document.getElementById('history-grouped');
+    const paged = document.getElementById('history-paged');
+    const pagination = document.getElementById('history-pagination');
     const moreBtn = document.getElementById('history-more-btn');
-    if (!section || !preview || !grouped) return;
+    if (!section || !preview || !paged || !pagination) return;
 
     const items = _historyItems();
     if (!items.length) {
@@ -224,29 +324,49 @@ const Bookshelf = (() => {
     }
     section.hidden = false;
 
+    const perPage = _columnCount();
+
     if (moreBtn) {
-      moreBtn.hidden = items.length <= PREVIEW_LIMIT;
+      moreBtn.hidden = items.length <= perPage;
       moreBtn.textContent = _historyExpanded ? '收起' : '更多';
     }
 
-    if (!_historyExpanded) {
-      grouped.hidden = true;
+    if (!_historyExpanded || items.length <= perPage) {
+      paged.hidden = true;
+      pagination.hidden = true;
       preview.hidden = false;
-      preview.innerHTML = items.slice(0, PREVIEW_LIMIT).map(_historyItemHtml).join('');
+      preview.innerHTML = items.slice(0, perPage).map(_historyItemHtml).join('');
       _bindHistoryClicks(preview);
+      _applyTipVisibility(preview);
       return;
     }
 
     preview.hidden = true;
-    grouped.hidden = false;
-    const groups = ReadingHistory.groupByTime(items);
-    grouped.innerHTML = groups.map((g) => {
-      return '<div class="history-group">' +
-        '<h3 class="history-group-title">' + _esc(g.label) + '</h3>' +
-        '<div class="history-group-grid">' + g.items.map(_historyItemHtml).join('') + '</div>' +
-        '</div>';
-    }).join('');
-    _bindHistoryClicks(grouped);
+    paged.hidden = false;
+    pagination.hidden = false;
+
+    // 缩放后以当前页首本书为锚点续展，页码按新的每页数重算
+    const anchorIdx = _anchorIndex(items);
+    const start = anchorIdx >= 0 ? anchorIdx : (_historyPage - 1) * perPage;
+    const totalPages = Math.max(1, Math.ceil(items.length / perPage));
+    const page = _currentPage(items, perPage);
+    _historyPage = page;
+
+    paged.innerHTML = items.slice(start, start + perPage).map(_historyItemHtml).join('');
+    _bindHistoryClicks(paged);
+    _applyTipVisibility(paged);
+
+    const info = document.getElementById('history-page-info');
+    const prevBtn = document.getElementById('history-prev');
+    const nextBtn = document.getElementById('history-next');
+    if (info) info.textContent = '第 ' + page + ' / ' + totalPages + ' 页';
+    if (prevBtn) prevBtn.disabled = page <= 1;
+    if (nextBtn) nextBtn.disabled = page >= totalPages;
+
+    if (anchorIdx < 0) {
+      const first = items[start];
+      _historyAnchorKey = first ? _historyKey(first) : null;
+    }
   }
 
   function refreshHistory() {

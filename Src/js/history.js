@@ -3,16 +3,6 @@
  */
 const ReadingHistory = (() => {
   const STORAGE_KEY = 'mdr-reading-history';
-  const DAY = 24 * 60 * 60 * 1000;
-
-  const BUCKETS = [
-    { id: 'week', label: '一周内', max: 7 * DAY },
-    { id: 'month', label: '一月内', max: 30 * DAY },
-    { id: 'quarter', label: '三月内', max: 90 * DAY },
-    { id: 'half', label: '半年内', max: 180 * DAY },
-    { id: 'year', label: '一年内', max: 365 * DAY },
-    { id: 'older', label: '很久以前', max: Infinity }
-  ];
 
   function _load() {
     try {
@@ -112,20 +102,5 @@ const ReadingHistory = (() => {
     return Object.values(books).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }
 
-  function groupByTime(items) {
-    const now = Date.now();
-    const groups = BUCKETS.map((b) => ({ id: b.id, label: b.label, items: [] }));
-    for (const item of items) {
-      const age = now - (item.updatedAt || 0);
-      for (let i = 0; i < BUCKETS.length; i++) {
-        if (age < BUCKETS[i].max) {
-          groups[i].items.push(item);
-          break;
-        }
-      }
-    }
-    return groups.filter((g) => g.items.length > 0);
-  }
-
-  return { record, updateScroll, get, remove, retain, list, groupByTime };
+  return { record, updateScroll, get, remove, retain, list };
 })();
