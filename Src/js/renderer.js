@@ -213,11 +213,11 @@ const DocRenderer = (() => {
     }
 
     const resolved = _joinBookRel(href);
-    const segments = resolved.split('/').filter(Boolean);
     if (_bookId) {
-      return '/content/' + encodeURIComponent(_bookId) + '/' +
-        segments.map((s) => encodeURIComponent(s)).join('/');
+      return '/api/books/' + encodeURIComponent(_bookId) + '/asset?path=' +
+        encodeURIComponent(resolved);
     }
+    const segments = resolved.split('/').filter(Boolean);
     return '/' + segments.join('/');
   }
 

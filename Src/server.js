@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '..');
 const ALWAYS_IGNORED = new Set(['.git', '.vscode', 'node_modules']);
 
 const READER_ARRAY_FIELDS = ['booksRoot', 'booksCfg'];
-const BOOK_SHAPE_FIELDS = ['name', 'path', 'cover', 'home', 'meta', 'exclude', 'features'];
+const BOOK_SHAPE_FIELDS = ['name', 'path', 'assetRoots', 'cover', 'home', 'meta', 'exclude', 'features'];
 
 let booksRoots = [];
 let extraBookConfigs = [];
@@ -468,6 +468,7 @@ function isBookConfigShape(raw) {
   if (raw.name != null && typeof raw.name !== 'string') return false;
   if (raw.cover != null && typeof raw.cover !== 'string') return false;
   if (raw.path != null && typeof raw.path !== 'string' && !Array.isArray(raw.path)) return false;
+  if (raw.assetRoots != null && typeof raw.assetRoots !== 'string' && !Array.isArray(raw.assetRoots)) return false;
   if (raw.meta != null && !isPlainObject(raw.meta)) return false;
   if (raw.home != null && typeof raw.home !== 'string') return false;
   if (raw.exclude != null && !Array.isArray(raw.exclude)) return false;
@@ -486,6 +487,13 @@ function parseBookConfig(configAbs, folderName) {
   }
   if (missing.length) {
     console.warn('[book] ' + folderName + ' 忽略无效 path：' + missing.join('；'));
+  }
+
+  const assetRootRels = asStringList(raw.assetRoots);
+  const { found: assetRoots, missing: missingAssetRoots } =
+    resolveExistingDirs(configDir, assetRootRels);
+  if (missingAssetRoots.length) {
+    console.warn('[book] ' + folderName + ' 忽略无效 assetRoots：' + missingAssetRoots.join('；'));
   }
 
   let coverAbs = null;
@@ -508,6 +516,7 @@ function parseBookConfig(configAbs, folderName) {
     configAbs: dirKey(configAbs),
     configDir,
     contentRoots,
+    assetRoots,
     coverAbs,
     hasCover: !!coverAbs,
     homeRel,
@@ -1158,6 +1167,35 @@ app.get('/api/books/:id/doc/*', (req, res) => {
   res.type('text/plain').send(fs.readFileSync(filePath, 'utf8'));
 });
 
+function resolveAssetFile(book, relPath) {
+  const raw = String(relPath || '').trim();
+  if (!raw || raw.includes('\0') || path.isAbsolute(raw)) return null;
+
+  const rel = toPosix(raw);
+  const allowedRoots = book.contentRoots.concat(book.assetRoots || []);
+  for (const contentRoot of book.contentRoots) {
+    const candidate = path.resolve(contentRoot, rel);
+    let real;
+    try {
+      real = fs.realpathSync(candidate);
+      if (!fs.statSync(real).isFile()) continue;
+    } catch {
+      continue;
+    }
+    if (allowedRoots.some((root) => isInside(root, real))) return real;
+  }
+  return null;
+}
+
+app.get('/api/books/:id/asset', (req, res) => {
+  const book = getBook(req.params.id);
+  if (!book) return res.status(404).end();
+  if (typeof req.query.path !== 'string') return res.status(400).end();
+  const filePath = resolveAssetFile(book, req.query.path);
+  if (!filePath) return res.status(404).end();
+  res.sendFile(filePath);
+});
+
 app.get('/api/books/:id', (req, res) => {
   const book = getBook(req.params.id);
   if (!book) return res.status(404).json({ error: '未找到书籍' });
@@ -1190,6 +1228,13 @@ ensureFreshBooks();
   const port = await findAvailablePort(requestedPort);
 
   app.listen(port, () => {
+    try {
+      const logDir = path.join(ROOT, 'logs');
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, 'port'), String(port));
+    } catch (err) {
+      console.warn('无法记录端口: ' + (err && err.message ? err.message : err));
+    }
     console.log('Markdown 阅读器 running at http://localhost:' + port);
     if (booksRootError) {
       console.warn('[config] ' + booksRootError);

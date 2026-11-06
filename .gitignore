@@ -35,3 +35,6 @@ $RECYCLE.BIN/
 .env.*
 .cache/
 coverage/
+
+# 后台服务写出的运行端口
+/logs/

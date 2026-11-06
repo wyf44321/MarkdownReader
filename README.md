@@ -6,12 +6,18 @@
 
 需要 Node.js 14+。
 
-- macOS：双击 `start.command`
+- macOS：双击 `start.command`。它会把阅读器注册为当前用户的后台服务，然后打开浏览器。窗口可以关掉，服务会继续运行。
+  - 登录后自动启动（重启电脑并登录后也会起来）。
+  - 进程崩溃、被杀死或异常退出后会自动重新拉起。
+  - 再次双击 `start.command` 只会打开浏览器，不会另起一份服务。
+  - 停止到下次登录：双击 `stop.command`。
+  - 取消登录自启：在本目录执行 `./service.sh uninstall`。
+  - 查看状态：`./service.sh status`。日志在 `~/Library/Logs/MarkdownReader/`。
 - Linux：`./start.sh`
 - Windows：双击 `start.bat`
 - 或：`cd Src && npm install && npm start`
 
-首次启动若没有 `config.jsonc`，启动脚本会从 `config.example.jsonc` 复制一份。默认端口 `3000`（被占用则自动加一）。也可用 `node Src/server.js --port=3000 --open`。
+首次启动若没有 `config.jsonc`，启动脚本会从 `config.example.jsonc` 复制一份。服务从端口 `3000` 开始（被占用则自动加一）。前台调试仍可用 `node Src/server.js --port=3000 --open`。
 
 ## 配置阅读器
 
@@ -30,7 +36,7 @@
 
 接力：在每个已列入的 `booksRoot` 目录自身及其一层子目录里查找 `config.jsonc`（或旧的 `config.json`）。**只合并数组字段**（`booksRoot`、`booksCfg`），按真实路径去重并继续接力。接力文件里的其它字段即使写了也不生效，一律以 `MarkdownReader/config.jsonc` 为准。
 
-`booksCfg` 用来补充书籍定义，不必使用 `config_mdr.jsonc` 这个文件名；可用通配符（如 `./cfgs/*.jsonc`、`./cfgs/**/*.jsonc`）。内容需符合书籍配置格式（`name` / `path` / `cover` / `home` / `meta` / `exclude` / `features`），否则忽略。同一文件若已通过目录扫描发现，不会重复加入。这类书的 id 取配置文件名（去掉后缀），避免同一目录下多本书抢同一个 id。
+`booksCfg` 用来补充书籍定义，不必使用 `config_mdr.jsonc` 这个文件名；可用通配符（如 `./cfgs/*.jsonc`、`./cfgs/**/*.jsonc`）。内容需符合书籍配置格式（`name` / `path` / `assetRoots` / `cover` / `home` / `meta` / `exclude` / `features`），否则忽略。同一文件若已通过目录扫描发现，不会重复加入。这类书的 id 取配置文件名（去掉后缀），避免同一目录下多本书抢同一个 id。
 
 若某个目录里只有旧的 `config.json` / `config_mdr.json`，运行时仍会读取；带注释时请改用 `.jsonc`。
 
@@ -43,6 +49,8 @@
 只有存在 `config_mdr.jsonc`（或旧的 `config_mdr.json`）的子目录才会出现在首页。每个 `booksRoot` 都只扫一层，不会递归找配置。也可以把任意文件名的书籍配置路径写进 `booksCfg`。
 
 `path` 相对 `config_mdr.jsonc` 所在目录，可写一个或一组根。若配置文件就在书根，写 `"."`；若只是一个「书卡」目录，写指向真正 Markdown 根的相对路径，例如 `"../../../XXX"`。多个根会合并进同一本书的侧栏，同名路径以数组里靠前的为准。
+
+`assetRoots` 是可选的独立资源根目录，可写字符串或字符串数组。它只为正文中的相对图片提供访问白名单，不参与侧栏、全文搜索或 Markdown 扫描。图片路径仍按当前文档位置解析；解析后的真实文件必须位于某个 `path` 或 `assetRoots` 内，否则服务端拒绝访问。资源本来就在 `path` 内时不需要配置。
 
 仓库自带 `Books/Demo` 作为公开示例。你自己的书请放到仓库外，用本机 `config.jsonc` 的 `booksRoot` 指向，不要把私人内容提交进本仓库。
 
